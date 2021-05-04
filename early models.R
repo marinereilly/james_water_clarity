@@ -44,7 +44,13 @@ draw(m1)
 
 
 
-
+mb <- gam(MeasureValue/TotalDepth ~ s(date_num) + 
+            s(date_num, by = CBSeg2003, m = 1) +
+            s(CBSeg2003, bs = 're') +
+            s(Station, bs = 're'),
+          data = james, family = betar,
+          subset = Parameter == 'SECCHI',
+          method = 'REML')
 
 
 
