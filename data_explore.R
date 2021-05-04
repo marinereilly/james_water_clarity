@@ -15,6 +15,30 @@ library(sf)
 
 df2<-df %>% 
   filter(grepl("JMS|CHK|APP",CBSeg2003))
-b<-ggplot(df2, aes(x=SampleDate, y=Parameter))+
-  geom_point()
-b
+
+df3<-st_as_sf(x = df2, 
+              coords = c("Longitude", "Latitude"),
+              crs = "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+
+c<-ggplot(df3) +
+  geom_sf()
+c
+
+library(tidyr)
+library(purrr)
+
+df4<-df2 %>% 
+  group_by(Parameter) %>% 
+  nest() %>% 
+  mutate(plot=map2(data,Parameter,~ggplot(.x)+
+                     geom_histogram(aes(x=MeasureValue),bins = 50)+
+                     ggtitle(.y)+theme_bw()
+                     ))
+df4$plot[[2]]
+
+if(!dir.exists("./parameter_histograms")){ #if a figures folder does not exist, create it.
+  dir.create("./parameter_histograms")
+}
+#use the map function with ggsave to save named figures. 
+
+map2(paste0("./parameter_histograms/", df4$Parameter, ".jpg"), df4$plot, ggsave)
