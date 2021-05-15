@@ -134,6 +134,55 @@ ggplot(data = secchi) +
   geom_histogram(aes(x = prop_vis), binwidth = 0.05)
 ```
 
-```{r}
+```{r echo=FALSE}
+## THIS IS NOT PART OF THE REPORT
+## SAVING THESE TO FIGURE OUT BETAREG
+
+## Possbile that intercepts aren't needed -- check to make sure this is still valid.
+
+m_br1 <- bam(prop_vis ~
+              CBSeg2003 +
+              s(date_num, by = CBSeg2003, m = 3, k = 20) +
+              s(Station, bs = 're'),
+            data = secchi,
+            family = betar,
+            # subset ,
+            discrete = T)
+
+m_br2 <- bam(prop_vis ~
+               CBSeg2003 +
+               s(date_num, by = CBSeg2003, m = 3, k = 20) +
+               s(Station, bs = 're'),
+             data = secchi,
+             family = betar(link = 'probit'),
+             # subset ,
+             discrete = T)
+
+m_br3 <- bam(prop_vis ~
+               CBSeg2003 +
+               s(date_num, by = CBSeg2003, m = 3, k = 20) +
+               s(Station, bs = 're'),
+             data = secchi,
+             family = betar(link = 'cloglog'),
+             # subset ,
+             discrete = T)
+
+m_br3b <- bam(prop_vis ~
+                s(date_num, by = CBSeg2003, m = 3, k = 20) +
+                s(Station, bs = 're'),
+              data = secchi,
+              family = betar(link = 'cloglog'),
+              # subset ,
+              discrete = T)
+
+
+#BOOO
+m_br4b <- bam(prop_vis ~
+                s(date_num, by = CBSeg2003, m = 3, k = 20) +
+                s(Station, bs = 're'),
+              data = secchi,
+              family = betar(link = 'cauchit'),
+              # subset ,
+              discrete = T)
 
 ```
