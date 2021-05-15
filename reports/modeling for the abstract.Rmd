@@ -1,0 +1,139 @@
+---
+title: "Analysis to create an abstract"
+author: "Mike O'Brien"
+date: "2021-05-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages and import data
+
+```{r}
+library(data.table); library(mgcv); library(gratia)
+library(ggplot2); library(patchwork)
+
+wq <- fread('data/MASTER FILE - Synced SAV and WQ Data for ALL Segments - CBWQData_ANALYSISFILE.csv')
+
+wq[, ':='(date_num = as.numeric(as.Date(SampleDate, '%m/%d/%Y')),
+          CBSeg2003 = as.factor(CBSeg2003),
+          Station = as.factor(Station))]
+```
+
+## Data information
+
+Judging by the unique Chesapeake Bay segment codes, it seems that we only have data for the James, Appomattox, Chickahominy, Potomac, and an up-Bay mainstem Chesapeake segment.
+
+```{r}
+wq_spatial <- sf::st_as_sf(unique(wq, by = c('Latitude', 'Longitude')),
+                           coords = c('Longitude', 'Latitude'),
+                           crs = 4326)
+
+mapview::mapview(
+  wq_spatial, zcol = 'CBSeg2003'
+)
+```
+
+## Modeling
+
+### Distribution checks
+
+Looks like secchi depth is log-normal or Gamma-distributed.
+
+```{r}
+secchi <- wq[Parameter == 'SECCHI']
+
+## Lognormal
+m1 <- glm(log(MeasureValue + 1e-7) ~ 1,
+          family = gaussian,
+          data = secchi)
+
+ggplot(data = secchi, aes(x = MeasureValue)) +
+  geom_histogram(binwidth = 0.2, aes(y = after_stat(density))) +
+  geom_function(fun = function(x) dlnorm(x, coef(m1), sigma(m1))) +
+  labs(title = 'Lognormal fit')
+
+
+
+## Gamma
+m2 <- glm(MeasureValue + 1e-7 ~ 1,
+          family = Gamma(),
+          data = secchi)
+
+ggplot(data = secchi, aes(x = MeasureValue)) +
+  geom_histogram(binwidth = 0.2, aes(y = after_stat(density))) +
+  geom_function(fun = function(x){
+    dgamma(x,
+           shape = 1/summary(m2)$dispersion,
+           rate = coef(m2)/summary(m2)$dispersion)
+  }) +
+  labs(title = 'Gamma fit')
+```
+
+They're pretty similar, but the lognormal is a bit more straightforward, so I'll go with that.
+
+### Lognormal model
+
+There's only one record where Secchi depth is 0, so I'm just discarding that one. `m=3` means that the third derivative of the smooth is being penalized if it's too "wiggly". Don't worry too much about that, it's just different from the default to make sure we can model the second derivative. I've also increased the maximum allowable degrees of freedom (`k=20`). This may lead to overfilling, but I'm going to hope that it gets penalized down.
+
+```{r}
+m_ln <- bam(log(MeasureValue) ~
+              CBSeg2003 +
+              s(date_num, by = CBSeg2003, m = 3, k = 20) +
+              s(Station, bs = 're'),
+            data = secchi,
+            subset = MeasureValue > 0,
+            discrete = T)
+
+summary(m_ln)
+```
+
+This model explains 45% of the deviance, which seems pretty good at the moment. The tidal fresh Chesapeake and tidal fresh Potomac have pretty high effective degrees of freedom, so they're likely overfit (really, it means that we've missed something important). Note that only the polyhaline James and mesohaline Potomac are any different than any of the other segments -- they're slightly higher.
+
+```{r}
+appraise(m_ln)
+```
+
+The model is definitely not perfect. There are some issues with the QQ plot which are reflected in the histogram -- we seem to be far undershooting some of smaller values. Remember that the response here are log-transformed values, so the issue here is that we're modeling something as having 1 m visibility when it really has 0.5. No biggy.
+
+```{r}
+draw(m_ln) + 
+  plot_annotation(title = 'Secchi depth through time')
+```
+
+We can really see the overfitting of the tidal fresh here. Something other than time is driving this ship. The random effect of station seems pretty well accounted for.
+
+Now for the derivatives. Remember that "significance" is whether the confidence intervals contain zero. Don't pay attention to the trend of these lines, just whether they're above or below zero.
+
+```{r}
+draw(derivatives(m_ln, 1:10, eps = 1e-4)) + 
+  plot_annotation(title = 'Change in Secchi depth through time',
+                  subtitle = 'First derivative')
+```
+
+```{r}
+draw(derivatives(m_ln, 1:10, order = 2, eps = 0.08)) + 
+  plot_annotation(title = 'Rate of Secchi depth change through time',
+                  subtitle = 'Second derivative')
+```
+
+## Beta regression
+
+Secchi depth is inherently limited by the total depth depth. What if we scale Secchi depth by the overall depth: model the proportion of the water column that we could see through? This is beta regression
+
+```{r}
+secchi[, prop_vis := MeasureValue / TotalDepth]
+
+# Sometimes Secchi depth is greater than the total depth...
+#   Just calling that 100% for now.
+secchi[, prop_vis := fifelse(prop_vis > 1, 1, prop_vis)]
+
+ggplot(data = secchi) +
+  geom_histogram(aes(x = prop_vis), binwidth = 0.05)
+```
+
+```{r}
+
+```
