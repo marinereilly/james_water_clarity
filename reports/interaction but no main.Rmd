@@ -1,0 +1,51 @@
+---
+title: "Can I use an interaction term without a main effect?"
+output: pdf_document
+---
+
+Create two populations that start at the same place, but have diferent responses to `time`.
+
+```{r}
+popA <- c(rnorm(200, 0),
+          rnorm(200, 5),
+          rnorm(200, 10))
+
+popB <- c(rnorm(200, 0),
+          rnorm(200, 10),
+          rnorm(200, 20))
+
+fake_data <- data.frame(
+  population = rep(c('A', 'B'), each = 600),
+  response = c(popA, popB),
+  time = rep(
+    rep(c(0, 1, 2), each = 200),
+    times = 2
+  )
+)
+```
+
+## Full model
+
+`population` term is not significant.
+
+```{r}
+m_full <- lm(response ~ population*time,
+             data = fake_data)
+summary(m_full)
+```
+
+## Model without the main effect of `population`
+
+In this instance, similar estimates (possibly not the case with more-complicated models?).
+
+```{r}
+m_nomain <- lm(response ~ time + population:time,
+               data = fake_data)
+summary(m_nomain)
+```
+
+
+
+```{r}
+anova(m_full, m_nomain, test = 'LRT')
+```
