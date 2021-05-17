@@ -40,43 +40,80 @@ mapview::mapview(
 
 ### Distribution checks
 
-Looks like secchi depth is log-normal or Gamma-distributed.
+Looks like secchi depth is log-normal or Gamma-distributed. Technically, they need to be log-normally/Gamma-distributed conditional on the predictors, but this'll probably get us close enough.
 
 ```{r}
 secchi <- wq[Parameter == 'SECCHI']
 
 ## Lognormal
-m1 <- glm(log(MeasureValue + 1e-7) ~ 1,
+m1 <- glm(log(MeasureValue + 1e-7) ~ CBSeg2003,
           family = gaussian,
           data = secchi)
 
+### Pull out model terms to create the distribution
+mnlog <- coef(m1)
+mnlog[2:length(mnlog)] <- mnlog[2:length(mnlog)] + mnlog[1]
+
+m1_fit <- data.frame(MeasureValue = 
+                       rep(
+                         seq(0, 4, length.out = 200),
+                         each = length(unique(secchi$CBSeg2003))
+                       ),
+                     CBSeg2003 = as.factor(unique(secchi$CBSeg2003))
+)
+m1_fit$fit <- dlnorm(m1_fit$MeasureValue,
+                     meanlog = mnlog,
+                     sdlog = sigma(m1))
+
+
 ggplot(data = secchi, aes(x = MeasureValue)) +
   geom_histogram(binwidth = 0.2, aes(y = after_stat(density))) +
-  geom_function(fun = function(x) dlnorm(x, coef(m1), sigma(m1))) +
-  labs(title = 'Lognormal fit')
+  labs(title = 'Lognormal fit') +
+  geom_line(data = m1_fit, aes(x = MeasureValue, y = fit)) + 
+  facet_wrap(~CBSeg2003)
+
 
 
 
 ## Gamma
-m2 <- glm(MeasureValue + 1e-7 ~ 1,
+m2 <- glm(MeasureValue + 1e-7 ~ CBSeg2003,
           family = Gamma(),
           data = secchi)
 
+### Pull out model terms to create the distribution
+rate <- coef(m2)
+rate[2:length(rate)] <- rate[2:length(rate)] + rate[1]
+rate <- rate / summary(m2)$dispersion
+
+m2_fit <- data.frame(MeasureValue = 
+                       rep(
+                         seq(0, 4, length.out = 200),
+                         each = length(unique(secchi$CBSeg2003))
+                       ),
+                     CBSeg2003 = as.factor(unique(secchi$CBSeg2003))
+)
+m2_fit$fit <- dgamma(m1_fit$MeasureValue,
+                     shape = 1/summary(m2)$dispersion,
+                     rate = rate)
+
+
+
 ggplot(data = secchi, aes(x = MeasureValue)) +
   geom_histogram(binwidth = 0.2, aes(y = after_stat(density))) +
-  geom_function(fun = function(x){
-    dgamma(x,
-           shape = 1/summary(m2)$dispersion,
-           rate = coef(m2)/summary(m2)$dispersion)
-  }) +
-  labs(title = 'Gamma fit')
+  labs(title = 'Gamma fit') +
+  geom_line(data = m2_fit, aes(x = MeasureValue, y = fit)) +
+  facet_wrap(~ CBSeg2003)
 ```
 
-They're pretty similar, but the lognormal is a bit more straightforward, so I'll go with that.
+They're pretty similar but the lognormal is a bit more straightforward, so I'll go with that for now.
 
 ### Lognormal model
 
-There's only one record where Secchi depth is 0, so I'm just discarding that one. `m=3` means that the third derivative of the smooth is being penalized if it's too "wiggly". Don't worry too much about that, it's just different from the default to make sure we can model the second derivative. I've also increased the maximum allowable degrees of freedom (`k=20`). This may lead to overfilling, but I'm going to hope that it gets penalized down.
+There's only one record where Secchi depth is 0, so I'm just discarding that one. `m = 3` means that the third derivative of the smooth is being penalized if it's too "wiggly". Don't worry too much about that, it's just different from the default to make sure we can model the second derivative. I've also increased the maximum allowable degrees of freedom (`k = 20`). This may lead to overfilling, but I'm going to hope that it gets penalized down.
+
+The log of Secchi depth is now modeled separately for each Chesapeake Bay segment as a smoothed function over time (in days): `s(date_num, by = CBSeg2003)`. Those smoothed functions are centered (mean of 0), so it has to be added as a parametric term in order to see if Secchi depth should be shifted up/down.
+
+Station is included here as a random intercept. This implies that each site has the same response to time as the Chesapeake segment they're in, but that each station starts at a different level. The distribution of those starting levels is assumed to be normally distributed around the Chesapeake segment's mean, so extreme values will be biased/pulled toward that mean.
 
 ```{r}
 m_ln <- bam(log(MeasureValue) ~
@@ -90,22 +127,22 @@ m_ln <- bam(log(MeasureValue) ~
 summary(m_ln)
 ```
 
-This model explains 45% of the deviance, which seems pretty good at the moment. The tidal fresh Chesapeake and tidal fresh Potomac have pretty high effective degrees of freedom, so they're likely overfit (really, it means that we've missed something important). Note that only the polyhaline James and mesohaline Potomac are any different than any of the other segments -- they're slightly higher.
+This model explains 45% of the deviance, which seems pretty good at the moment. The smooth terms of the tidal fresh Chesapeake and tidal fresh Potomac have high effective degrees of freedom, so they're likely overfit (more likely that we've missed something important to those segments). Note that only the polyhaline James and mesohaline Potomac are any different than any of the other segments -- they're slightly higher. The Appamattox and James (aside from the tidal fresh) did not seem to change through time.
 
 ```{r}
 appraise(m_ln)
 ```
 
-The model is definitely not perfect. There are some issues with the QQ plot which are reflected in the histogram -- we seem to be far undershooting some of smaller values. Remember that the response here are log-transformed values, so the issue here is that we're modeling something as having 1 m visibility when it really has 0.5. No biggy.
+The model is definitely not perfect. There are some issues with the QQ plot which are reflected in the histogram -- we seem to be far overshooting some of smaller values. Remember that the response here are log-transformed values, so the issue here is that we're modeling something as having 1 m visibility when it really has 0.5. No biggy.
 
 ```{r}
 draw(m_ln) + 
   plot_annotation(title = 'Secchi depth through time')
 ```
 
-We can really see the overfitting of the tidal fresh here. Something other than time is driving this ship. The random effect of station seems pretty well accounted for.
+We can really see the overfitting of the tidal fresh here. Something other than time is driving this ship. The random effect of station seems pretty well accounted-for. Note that the confidence intervals overlap 0 for many of the smooths -- remember that "significance" is whether the confidence intervals contain zero. So, no significant differences when that happens.
 
-Now for the derivatives. Remember that "significance" is whether the confidence intervals contain zero. Don't pay attention to the trend of these lines, just whether they're above or below zero.
+Now for the derivatives. Don't pay attention to the trend of these lines, just whether they're above or below zero.
 
 ```{r}
 draw(derivatives(m_ln, 1:10, eps = 1e-4)) + 
@@ -113,15 +150,59 @@ draw(derivatives(m_ln, 1:10, eps = 1e-4)) +
                   subtitle = 'First derivative')
 ```
 
+What I'm seeing here:
+
+-   Appamattox TF: No significant change. There may have been a significant decrease between 1998ish and 2004ish.
+
+-   Chesapeake TF: We really have not modeled this well; something is going on here that isn't correlated with time.
+
+-   Chickahominy OH: There was a significant decrease from1990ish through 2004ish. There as been a non-significant positive increase since.
+
+-   James MH: There was a slightly-significant increase from 2004ish onward.
+
+-   James OH: Significant increase around 1990ish, significant decrease around 2003ish.
+
+-   James PH: No significant change.
+
+-   James TF: Eesh.
+
+-   Potomac MH: Very strong significant decrease since 2010ish.
+
+-   Potomac OH: Significant decreases prior to 2007ish.
+
+-   Potomac TF: Jibberish, like most of our tidal fresh segments.
+
 ```{r}
 draw(derivatives(m_ln, 1:10, order = 2, eps = 0.08)) + 
   plot_annotation(title = 'Rate of Secchi depth change through time',
                   subtitle = 'Second derivative')
 ```
 
+What I'm seeing in the second derivatives:
+
+-   Appamattox TF: No significant change in the rate of change.
+
+-   Chesapeake TF: Jibberish.
+
+-   Chickahominy OH: No significant change in the rate of change.
+
+-   James MH: No significant change in the rate of change.
+
+-   James OH: Significantly increasing rate of change around 1990ish
+
+-   James PH: No significant change in the rate of change.
+
+-   James TF: Eesh, again. Might be able to flesh something out here, though.
+
+-   Potomac MH: Things were getting worse, faster, after 2010.
+
+-   Potomac OH: No significant change in the rate of change.
+
+-   Potomac TF: Jibberish.
+
 ## Beta regression
 
-Secchi depth is inherently limited by the total depth depth. What if we scale Secchi depth by the overall depth: model the proportion of the water column that we could see through? This is beta regression
+Secchi depth is inherently limited by the total depth depth. What if we scale Secchi depth by the overall depth: model the proportion of the water column that we could see through? This is beta regression.
 
 ```{r}
 secchi[, prop_vis := MeasureValue / TotalDepth]
@@ -138,7 +219,9 @@ ggplot(data = secchi) +
 ## THIS IS NOT PART OF THE REPORT
 ## SAVING THESE TO FIGURE OUT BETAREG
 
-## Possbile that intercepts aren't needed -- check to make sure this is still valid.
+## Possbile that intercepts aren't needed -- check to make sure this is still valid. MOB 20210514
+
+## No, intercepts are needed (not 100%, but I think). There's just not that much here on first blush. MOB 20210517
 
 m_br1 <- bam(prop_vis ~
               CBSeg2003 +
